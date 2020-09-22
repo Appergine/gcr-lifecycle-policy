@@ -38,11 +38,12 @@ Storage Object Admin
 
 ```
 docker run -it -e PROJECT_ID=my-project \
-  -e GCLOUD_SERVICE_KEY="$(cat serviceaccount.json| base64)"  \
+  -e GOOGLE_APPLICATION_CREDENTIALS="/var/run/gcp/secret.json"  \
   -e KEEP_TAGS=10 -e RETENTION_DAYS=365 \
   -e REPOSITORY='eu.gcr.io/my-project' \
   -e ZONE="europe-west1-b" \
   -e CLUSTER_NAME="prod" \
+  -v serviceaccount.json:/var/run/gcp/secret.json
     gcr-retention:0.0.1
 ```
 
