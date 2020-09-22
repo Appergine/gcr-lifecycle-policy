@@ -1,4 +1,8 @@
 #!/bin/bash
+# Based on the script from https://github.com/marekaf/gcr-lifecycle-policy/blob/fc9c7d6/entrypoint.sh
+# Modified the script to ignore cache in the registries
+# Modified the script to delete tags matching a regex or with no tags
+
 set -euo pipefail
 
 # todo: rewrite this to python (pykube-ng, docker-py)
@@ -15,6 +19,7 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" --zone "$ZONE" --proje
 # arg handling
 KEEP=${KEEP_TAGS:-10}
 RETENTION=${RETENTION_DAYS:-365}
+REGEX=${TAG_REGEX:-'.*'}
 
 ## convert RETENTION_DAYS to milliseconds (that is what docker api is using in "timeCreatedMs")
 STAMP=$(date --date="$RETENTION days ago" +%s%3N)
@@ -66,8 +71,8 @@ jq -Rn '''
 
 echo "--------------------------------"
 
-## loop through all "images" in GCR
-grep -v '^ *#' < images.txt | while IFS= read -r image
+## loop through all "images" in GCR matching */* to prevent cache from being deleted
+grep -e '^[^!\/]*\/[^!\/]*$' < images.txt | while IFS= read -r image
 do
 
   # debug only
@@ -105,12 +110,18 @@ do
     # check all the digests and their tags, if any of digest's tag array contain a tag that is used in the cluster, change the check bool
     # the IN() jq function is available in jq version >1.5. That is why is jq installed from binary and not via apt.
     jq --slurpfile usedTags used-tags-tmp.json '[.[] |  select(any(.tag[] ; . |  IN($usedTags[][]))).checkInClusterUsePassed="true"]' |
-    # add checkDatePassed="false" to all of the objects, later we will check if they passed this check and change to "true"
+    # add checkDatePassed="true" to all of the objects, later we will check if they passed this check and change to "true"
     jq '.[].checkDatePassed="true" ' |
     # select the digests that are older than our RETENTION_DAYS timestamp
     jq '[.[] | select(.timeCreatedMs < "'"$STAMP"'").checkDatePassed="false"]' |
+    # add matchesRegex="false" to all of the objects, later we will check if they passed this check and change to "true"
+    jq '.[].matchesRegex="false"' |
+    # set digests with empty tags as matching the regex
+    jq '[.[] | select(.tag | length == 0).matchesRegex="true"]' |
+    # select the digests with tags that match the REGEX
+    jq "[.[] | select(any(.tag[] ; . | test(\"$REGEX\") )).matchesRegex=\"true\"]" |
     # select the ones that failed all three checks, those are the candidates to be deleted
-    jq '.[] | select(.checkDatePassed == "true" or .checkInClusterUsePassed == "true" or .checkMostRecentTagsPassed == "true" | not)' \
+    jq '.[] | select(.checkDatePassed == "true" or .checkInClusterUsePassed == "true" or .checkMostRecentTagsPassed == "true" or .matchesRegex == "false" | not)' \
     >final.json
 
   TO_DELETE=$(jq --raw-output '.digest' final.json) #| head
@@ -120,19 +131,17 @@ do
     echo "$( wc -l <used-tags-tmp.json ) tags found in cluster, $(echo "$TO_DELETE" | wc -l) digests to delete:"
     echo "$TO_DELETE" | head || true
     echo "... and others"
-    # TOOD: how many failed the check Date?
 
-    # TODO: now this is only a dry-run, later you can delete these digests
-    # foreach digest in TO_DELETE
-    # gcloud container images delete -q --force-delete-tags "${IMAGE}@${digest}"
-    # + gcloud container images delete -q --force-delete-tags "eu.gcr.io/my-project/foo/bar@sha256:296e2378f7a14695b2f53101a3bd443f656f823c46d13bf6406b91e9e9950ef0"
+    for digest in $TO_DELETE
+    do
+      echo "${DOCKER_REGISTRY_HOST}/${image}@${digest}"
+      gcloud container images delete -q --force-delete-tags "${DOCKER_REGISTRY_HOST}/${image}@${digest}"
+    done
 
   else
     echo "image=$image:"
     echo "$( wc -l < used-tags-tmp.json) tags found in cluster"
     echo "no digests to delete"
   fi
-
-  echo ""
 
 done
