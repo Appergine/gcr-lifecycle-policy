@@ -9,8 +9,7 @@ set -euo pipefail
 
 # auth
 gcloud config set project "$PROJECT_ID"
-[[ "$GCLOUD_SERVICE_KEY" != "" ]] && ( echo "$GCLOUD_SERVICE_KEY" | base64 -d > /gcloud-service-key.json )
-gcloud auth activate-service-account --key-file /gcloud-service-key.json
+gcloud auth activate-service-account --key-file $GOOGLE_APPLICATION_CREDENTIALS
 echo "successfully authenticated"
 
 # fetch the GKE's kubeconfig
